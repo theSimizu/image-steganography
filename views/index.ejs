@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+        <div>
+            <label for="msg">Message:</label>
+            <!-- <input type="text" name="msg" id="msg"> -->
+            <textarea name="msg" id="msg" cols="30" rows="10"></textarea>
+        </div>
+        <br>
+
+        <div>
+            <label for="pwd">Password:</label>
+            <input type="password" name="pwd" id="pwd">
+        </div>
+        <br>
+        <div>
+            <input type="file" name="file" />
+            <input type="submit" value="Upload" />
+        </div>
+        
+    </form>
+</body>
+</html>
