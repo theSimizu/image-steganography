@@ -8,19 +8,28 @@
 <body>
     <form action="/upload" method="post" enctype="multipart/form-data">
         <div>
-            <label for="msg">Message:</label>
-            <!-- <input type="text" name="msg" id="msg"> -->
-            <textarea name="msg" id="msg" cols="30" rows="10"></textarea>
+            <!-- <label for="msg">Message:</label> -->
+            <textarea name="msg" id="msg" cols="30" rows="10" placeholder="Message"></textarea>
+            <input type="file" name="msg"/>
+
         </div>
         <br>
 
         <div>
-            <label for="pwd">Password:</label>
-            <input type="password" name="pwd" id="pwd">
+            <div>
+                <!-- <label for="pwd" id="lblPwd1">Password:</label> -->
+                <input type="password" name="pwd" id="pwd" placeholder="Password">
+            </div>
+            <br>
+            <div>
+                <!-- <label for="pwd" id="lblPwd2">Confirm:</label> -->
+                <input type="password" name="pwd" id="pwd" placeholder="Confirm password">
+            </div>
+            
         </div>
         <br>
         <div>
-            <input type="file" name="file" />
+            <input type="file" name="img" required />
             <input type="submit" value="Upload" />
         </div>
         

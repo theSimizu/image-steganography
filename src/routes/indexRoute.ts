@@ -7,7 +7,7 @@ const router = Router()
 const storage = multer.memoryStorage() // Store the file in memory as a buffer
 const upload = multer({ storage })
 
-router.post('/upload', upload.single('file'), placeholder)
+router.post('/upload', upload.fields([{name: 'msg', maxCount: 1}, {name: 'img', maxCount: 1}]), placeholder)
 router.post('/extract', upload.single('file'), extMsg)
 
 

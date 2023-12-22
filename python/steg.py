@@ -1,48 +1,39 @@
 #!venv/bin/python
 import os
-import time
 import sys
 import argparse
 import random
 import xxhash
-import hashlib
 import select
 import pathlib
 import secrets
-import gzip
-from hashlib import sha512
-from PIL import Image
+import math
+import numpy as np
+from cry import Crypt
 from io import BytesIO
-from Crypto.Cipher import AES 
-from Crypto.Random import get_random_bytes
+from PIL import Image
+from hashlib import sha512
 
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument('action', nargs='?')
+parser.add_argument('action', nargs='?', choices=['embed', 'extract'])
 parser.add_argument('-m', '--message')
 parser.add_argument('-p', '--password')
 parser.add_argument('-mt', '--method')
 parser.add_argument('-if', '--image_file')
 parser.add_argument('-mf', '--message_file')
 parser.add_argument('-o', '--output')
-# parser.add_argument("-piu", "--pipeimageupload", help="FIFO with image data")
-# parser.add_argument("-pid", "--pipeimagedownload", help="FIFO with image data")
-# parser.add_argument("-pmu", "--pipemessageupload", help="FIFO with message data")
-# parser.add_argument("-pmd", "--pipemessagedownload", help="FIFO with message data")
-# parser.add_argument("-pw", "--password", help="FIFO with message data")
-# parser.add_argument("-ph", "--pipepasshash", help="FIFO with message data")
 
 args = parser.parse_args()
 
 class Steganography:
-
     @staticmethod
-    def __convert_to_binary(cipher_bytes:bytes):
+    def __text_to_bits(cipher_bytes:bytes):
         return [format(x, 'b').zfill(8) for x in cipher_bytes]
     
     @staticmethod
-    def __convert_to_text(binary:list[str]):
+    def __bits_to_text(binary:list[str]):
         text = ''.join([format(int(txt, 2), 'x').zfill(2) for txt in binary])
         return bytes.fromhex(text)
     
@@ -50,69 +41,57 @@ class Steganography:
         self.__action = action
         self.__method = method
         self.__message = message
+        self.__message_chunk_size = 1
         self.set_password(password)
         self.set_image(image_file)
         self.set_output(output)
         if action == 'hide':
             self.set_message(message, message_file)
 
-    def __compress_message(self):
-        self.__message = gzip.compress(self.__message)
-        
-    def __decompress_message(self):
-        self.__message = gzip.decompress(self.__message)
+    def __recover_from_hamming_code(self, cover):
+        if type(cover) == str or type(cover) == list[str]: cover = [int(x) for x in cover]
 
-    def __set_binary_message(self):
-        self.__binary_message = Steganography.__convert_to_binary(self.__cipher_bytes)
+        cover = np.array(cover)
+        size = int(math.log2(len(cover)+1))
 
-    def __encrypt_message(self):
-        IV_LENGTH = 16
-        SALT_LENGTH = 64
-        KEY_LENGTH = 32
-        HASH_NAME = 'SHA512'
-        self.__compress_message()
-        iv = get_random_bytes(IV_LENGTH)
-        salt = get_random_bytes(SALT_LENGTH)
-        secret_key = hashlib.pbkdf2_hmac(HASH_NAME, self.__password.encode(), salt, 210000, KEY_LENGTH)
-        cipher = AES.new(secret_key, AES.MODE_GCM, iv)
+        indexes_with_1 = [[int(c, 2) for c in bin(index+1)[2:].zfill(size)] for index, val in enumerate(cover) if val]
+        indexes_with_1.append([0 for _ in range(size)]) # Avoid error if cover is full 0
 
-        encrypted_message_byte, tag = cipher.encrypt_and_digest(self.__message)
-        self.__cipher_bytes = iv + salt + encrypted_message_byte + tag
+        transposed_values = np.array(indexes_with_1).transpose()
+        xor_current_values = np.array([a.sum()%2 for a in transposed_values])
 
-    def __decrypt_message(self):
-        IV_LENGTH = 16
-        SALT_LENGTH = 64
-        KEY_LENGTH = 32
-        TAG_LENGTH = 16
-        HASH_NAME = 'SHA512'
-
-        iv_start, iv_end = (0, IV_LENGTH)
-        salt_start, salt_end = (iv_end, iv_end + SALT_LENGTH)
-        cipher_start, cipher_end = (salt_end, len(self.__cipher_bytes)-TAG_LENGTH)
-        tag_start = cipher_end
-
-        iv = self.__cipher_bytes[iv_start:iv_end]
-        salt = self.__cipher_bytes[salt_start:salt_end]
-        cipher = self.__cipher_bytes[cipher_start:cipher_end]
-        tag = self.__cipher_bytes[tag_start:]
+        return xor_current_values
 
 
-        secret_key = hashlib.pbkdf2_hmac(HASH_NAME, self.__password.encode(), salt, 210000, KEY_LENGTH)
-        decipher = AES.new(secret_key, AES.MODE_GCM, iv)
+    def __hamming_code_bits_change(self, message, cover):
+        if type(message) == str or type(message) == list[str]: message = [int(x) for x in message]
+        if type(cover) == str or type(cover) == list[str]: cover = [int(x) for x in cover]
 
-        try:
-            msg = decipher.decrypt_and_verify(cipher, tag)
-            self.__message = msg
-            self.__decompress_message()
-            return True
-        except:
-            return False
+        message = np.array(message)
+        cover = np.array(cover)
+
+        size = len(message)
+        if 2 ** size != len(cover)+1: raise Exception('Incompatible message and cover size')
+
+        indexes_with_1 = [[int(c, 2) for c in bin(index+1)[2:].zfill(size)] for index, val in enumerate(cover) if val]
+        indexes_with_1.append([0 for _ in range(size)]) # Avoid error if cover is full 0
+
+        transposed_values = np.array(indexes_with_1).transpose()
+        xor_current_values = np.array([a.sum()%2 for a in transposed_values])
+
+        difference = (xor_current_values - message) % 2
+        index_to_change = ''.join(difference.astype(str))
+        index_to_change = int(index_to_change, 2) -1
+
+        if index_to_change > -1: cover[index_to_change] = not cover[index_to_change]
+        return cover
         
     def __set_max_jump(self):
-        while True:
-            if self.__max_jump == 1: raise Exception('Message too large')
-            elif self.__max_jump <= ((self.__rgb_count) / (len(self.__binary_message)*9)) // 1: break
-            self.__max_jump = (self.__max_jump*3)//4
+        self.__max_jump = 2
+        while ((self.__rgb_count) / (len(self.__binary_message) * 9 * 2**self.__message_chunk_size-1)) > 2:
+            self.__message_chunk_size += 1
+        if self.__message_chunk_size == 1: raise Exception('Message too large')
+        self.__cover_chunk_size = 2**self.__message_chunk_size-1
         
     def __pixel_jump(self, salt):
         jumper = lambda val: int(xxhash.xxh3_64_hexdigest(val)[0:3], 16)
@@ -151,47 +130,65 @@ class Steganography:
             return px_value+mult
 
         coords = None
-        for chunk_index, bits_chunk in enumerate(self.__binary_message):
-            values_to_update = ([*bits_chunk[:3]], [*bits_chunk[3:6]], [*bits_chunk[6:]+'1'])
-            for value_index, bits in enumerate(values_to_update):
-                cur_jump = self.__pixel_jump(str(chunk_index) + str(value_index))
+        amount_of_pixels_to_hide_data = -(-(2 ** self.__message_chunk_size -1) // 3)
+        bin_message = [chunk+str(int(index != len(self.__binary_message)-1)) for index, chunk in enumerate(self.__binary_message)]
+        bin_message = ''.join(bin_message)
+        bin_message += '0' * (-len(bin_message) % self.__message_chunk_size)
+        chunked_message = [bin_message[x:x+self.__message_chunk_size] for x in range(0, len(bin_message), self.__message_chunk_size)]
+        for message_index, message in enumerate(chunked_message):
+            altered_pixels_coords = []
+            pixels_LSBs_cover = ''
+            for _ in range(amount_of_pixels_to_hide_data):
+                cur_jump = self.__pixel_jump(str(message_index) + str(_))
                 for _ in range(cur_jump):
                     coords = self.__get_zigzag_pixel_coords(coords)
                 x, y = coords[:2]
+                altered_pixels_coords.append((x, y))
+                LSBs = tuple(map(lambda e: str(e%2), tuple(self.__image_pxs[x, y])))
+                pixels_LSBs_cover += ''.join(LSBs)
+            
+            altered_LSBs = tuple(self.__hamming_code_bits_change(message, pixels_LSBs_cover[:self.__cover_chunk_size]))
+            new_pixels_LSBs = tuple(altered_LSBs[x:x+3] for x in range(0, len(altered_LSBs), 3))
 
-                RGB = list(self.__image_pxs[x, y])[:]
+            for index in range(len(altered_pixels_coords)):
+                x, y = altered_pixels_coords[index]
+                pixel_values_pre_change = list(self.__image_pxs[x, y])
+                new_values_LSB = new_pixels_LSBs[index]
+                for i in range(len(new_values_LSB)):
 
-                for color in range(3):
-                    if (RGB[color] % 2 == 0 and bits[color] == '1') or (RGB[color] % 2 == 1 and bits[color] == '0'):
-                        RGB[color] = changer(RGB[color])
-
-                if chunk_index == len(self.__binary_message)-1 and value_index == 2: 
-                    if RGB[2] % 2 == 1: 
-                        RGB[2] = changer(RGB[2])
-
-                self.__image_pxs[x, y] = tuple(RGB)
+                    if pixel_values_pre_change[i] % 2 != new_values_LSB[i]: 
+                        pixel_values_pre_change[i] = changer(pixel_values_pre_change[i])
+                        # pixel_values_pre_change[i] = 255
                 
+                self.__image_pxs[x, y] = tuple(pixel_values_pre_change)
+    
+
+    
     def __get_zigzag_pixel_with_data(self, loop, coords=None):
-        byte_bits = ''
-        end_of_message = False
-        for value_index in range(3):
-            cur_jump = self.__pixel_jump(str(loop) + str(value_index))
-            for _ in range(cur_jump):
-                coords = self.__get_zigzag_pixel_coords(coords)
-            x, y = coords[:2]
-            RGB = list(self.__image_pxs[x, y])[:]
+        try:
+            byte_bits = ''
+            end_of_message = False
+            amount_of_pixels_to_hide_data = -(-(2 ** self.__message_chunk_size -1) // 3)
+            
+            for a in range(amount_of_pixels_to_hide_data):
+                cur_jump = self.__pixel_jump(str(loop) + str(a))
+                for _ in range(cur_jump):
+                    coords = self.__get_zigzag_pixel_coords(coords)
+                x, y = coords[:2]
+                RGB = list(self.__image_pxs[x, y])[:]
+                for color in range(3):
+                    byte_bits += str(RGB[color] % 2)
+            msg = self.__recover_from_hamming_code(byte_bits[:2 ** self.__message_chunk_size -1])
 
-            for color in range(3):
-                if value_index == 2 and color == 2: end_of_message = RGB[color] % 2 == 0
-                elif RGB[color] % 2 == 0: byte_bits += '0'
-                else: byte_bits += '1'
-        return (byte_bits + ' ', end_of_message, coords)
-
-
+            return (''.join(map(lambda x: str(x), msg)), end_of_message, coords)
+        except:
+            raise Exception("Coudn't decrypt")
+                
     def __hide_in_image(self):
         if self.__method == 'LSB':
-            self.__encrypt_message()
-            self.__set_binary_message()
+            cry = Crypt(self.__message, self.__password.encode())
+            encrypted_message = cry.encrypt_message()
+            self.__binary_message = Steganography.__text_to_bits(encrypted_message)
             self.__set_max_jump()
             self.__zigzag_change_pixels()
             img_byte_arr = BytesIO()
@@ -199,20 +196,32 @@ class Steganography:
             self.__img_with_secret = img_byte_arr.getvalue()
 
     def __extract_and_decrypt_message(self):
-        while self.__max_jump > 1:
-            vals = None
+        self.__max_jump = 2
+        self.__message_chunk_size = 1
+        while True:
+            coords = None
             bits_text = ''
             loop = 0
             end_of_message = False
+            bits = []
             while not end_of_message:
-                byte_bits, end_of_message, vals = self.__get_zigzag_pixel_with_data(loop, vals)
+                byte_bits, end_of_message, coords = self.__get_zigzag_pixel_with_data(loop, coords)
                 bits_text += byte_bits
+                bits = [bits_text[b:b+9] for b in range(0, len(bits_text), 9)]
+                for bit in bits:
+                    if len(bit) == 9 and bit[8] == '0': end_of_message = True
+
                 loop+=1
-                
-            bits = bits_text.strip().split(' ')
-            self.__cipher_bytes = self.__convert_to_text(bits)
-            if self.__decrypt_message(): break
-            self.__max_jump = (self.__max_jump*3)//4
+
+            bits = [x[:8] for x in bits]
+            if len(bits[-1]) < 8: bits.pop()
+            self.__cipher_bytes = self.__bits_to_text(bits)
+            cry = Crypt(self.__cipher_bytes, self.__password.encode())
+
+            self.__message = cry.decrypt_message()
+            if self.__message: break
+            self.__message_chunk_size+=1
+
 
     def set_image(self, path):
         stream = None
@@ -225,13 +234,15 @@ class Steganography:
                 break
 
         if not stream: raise Exception('Insert an image')
-
-        self.__png = Image.open(stream).convert('RGB')
-        self.__image_width, self.__image_height = self.__png.size
-        self.__pixel_count = self.__image_width * self.__image_height
-        self.__rgb_count = self.__pixel_count*3
-        self.__image_pxs = self.__png.load()
-        self.__max_jump = self.__pixel_count
+        try:
+            self.__png = Image.open(stream).convert('RGB')
+            self.__image_width, self.__image_height = self.__png.size
+            self.__pixel_count = self.__image_width * self.__image_height
+            self.__rgb_count = self.__pixel_count*3
+            self.__image_pxs = self.__png.load()
+            self.__max_jump = self.__pixel_count
+        except:
+            raise Exception('Cannot identify image')
 
     def set_message(self, message:str|bytes=None, file_path:str=None):
         if type(message) == str: message = message.encode()
@@ -239,7 +250,6 @@ class Steganography:
             try:
                 with open(file_path, 'rb') as msg: message = msg.read()
             except:
-
                 raise Exception('Insert a message or select a file')
         self.__message = message
         return self.__message
@@ -282,7 +292,7 @@ class Steganography:
             os.write(1, self.__img_with_secret)
 
     def run(self):
-        if self.__action == 'hide':
+        if self.__action == 'embed':
             self.embed()
         elif self.__action == 'extract':
             self.extract_message()

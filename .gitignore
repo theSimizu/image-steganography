@@ -1,3 +1,7 @@
 dist/
 node_modules/
 python/venv/
+*.png
+*.jpg
+.gitignore
+__pycache__/
